@@ -1,0 +1,13 @@
+{
+    "zhenduantuili":{
+        "assistant_role_name":"zhuankeyisheng",
+        "user_role_name":"zhenduantuili",
+        "phase_prompt":[""]
+    },
+    "zhiliaoguihua":{
+        "assistant_role_name":"zhuankeyisheng",
+        "user_role_name":"zhenduantuili",
+        "phase_prompt":[" "
+        ]
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "zixunxinxi":{
+        "max_turn_step":3,
+        "need_reflect":"False"
+    },
+    "zhenduantuili":{
+        "max_turn_step":3,
+        "need_reflect":"False"
+    },
+    "zhuanjiataolun":{
+        "max_turn_step":10,
+        "need_reflect":"False"
+    },
+    "zhiliaoguihua":{
+        "max_turn_step":3,
+        "need_reflect":"False"
+    },
+    "lunliheguijiance":{
+        "max_turn_step":3,
+        "need_reflect":"False"
+    }
+}
