@@ -8,7 +8,6 @@ import uvicorn
 from fastapi.staticfiles import StaticFiles
 import os
 
-from RAG import process_and_store_pdf
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 from work import work
