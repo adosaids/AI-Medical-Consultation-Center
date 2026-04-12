@@ -16,16 +16,19 @@ class ModelType(Enum):
     ERNIE_Speed_P = "ERNIE-Speed-Pro-128K"
     ERNIE_Speed_8K = "ERNIE-Speed-8K"
     ERNIE_Speed_128K = "ERNIE-Speed-128K"
+    DEEPSEEK_V3_1_250821 = "deepseek-v3.1-250821"
+
     @property
     def is_qianfan(self) -> bool:
-        r"""Returns whether this type of models is an OpenAI-released model."""
+        r"""Returns whether this type of models is a Qianfan (Baidu) model."""
         return self in {
             ModelType.ERNIE_8K,
             ModelType.ERNIE_8K_P,
             ModelType.ERNIE_Character_8k,
             ModelType.ERNIE_Speed_128K,
             ModelType.ERNIE_Speed_8K,
-            ModelType.ERNIE_8K_P
+            ModelType.ERNIE_8K_P,
+            ModelType.DEEPSEEK_V3_1_250821
         }
 
     @property

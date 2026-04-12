@@ -29,8 +29,14 @@ class ERNIETokenCounter(BaseTokenCounter):
         if "ERNIE" in self.model:
             self.tokens_per_message = 3
             self.tokens_per_name = 1
+        elif "deepseek" in self.model.lower():
+            # DeepSeek 模型使用类似的 token 计算方式
+            self.tokens_per_message = 3
+            self.tokens_per_name = 1
         else:
-            raise NotImplementedError(f"Unsupported ERNIE model: {self.model}")
+            # 其他模型（包括千帆平台上的第三方模型）使用默认参数
+            self.tokens_per_message = 3
+            self.tokens_per_name = 1
 
         # 加载百度分词器
         self.embed_client = Embedding()
@@ -41,9 +47,9 @@ class ERNIETokenCounter(BaseTokenCounter):
             num_tokens += self.tokens_per_message
             for key, value in message.items():
                 if key == "content":
-                    # 调用百度 Embedding API 计算 Token
-                    resp = self.embed_client.do(texts=[str(value)], model="Embedding-V1")
-                    num_tokens += len(resp.body["data"][0]["embedding"])
+                    # 使用字符数除以4来估算 token 数，避免 Embedding API 的 1000 字符限制
+                    text = str(value)
+                    num_tokens += len(text) // 4 + 1
                 elif key == "name":
                     num_tokens += self.tokens_per_name
         num_tokens += 3  # 假设与 OpenAI 类似，添加系统 Token
@@ -130,7 +136,7 @@ class ERNIELongtermAgentMemory(LongtermAgentMemory):
     """ERNIE 专用的长期记忆模块"""
     def __init__(
         self,
-        model_type: ModelType = ModelType.ERNIE_8K,
+        model_type: ModelType = ModelType.DEEPSEEK_V3_1_250821,
         retrieve_limit: int = 5  # 增大检索数量以提升召回率
     ):
         # 使用 ERNIE 的上下文生成策略
@@ -174,7 +180,7 @@ class ERNIEHistoryMemory(ChatHistoryMemory):
         self,
         context_creator: BaseContextCreator = None,
         storage: Optional[BaseKeyValueStorage] = None,
-        model_type: ModelType = ModelType.ERNIE_8K,
+        model_type: ModelType = ModelType.DEEPSEEK_V3_1_250821,
         window_size: Optional[int] = 10,
     ) -> None:
         context_creator = ScoreBasedContextCreator(

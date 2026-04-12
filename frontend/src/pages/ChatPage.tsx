@@ -1,20 +1,41 @@
 import { useState, useRef, useEffect } from 'react'
 import { Card, Input, Button, List, Avatar, Spin, Tag, Steps } from 'antd'
 import { UserOutlined, RobotOutlined, MedicineBoxOutlined, SolutionOutlined, FileTextOutlined } from '@ant-design/icons'
-import { sendMessage, getDiagnosis } from '../services/api'
+import { sendStreamingMessage, startStreamingDiagnosis, connectWebSocket } from '../services/api'
 
 const { TextArea } = Input
 
 interface Message {
   id: string
-  role: 'user' | 'nurse' | 'doctor' | 'system'
+  role: 'user' | 'nurse' | 'doctor' | 'system' | 'expert' | 'assistant'
   content: string
   timestamp: Date
 }
 
-interface DiagnosisResult {
-  诊断推理: string[]
-  治疗规划: string[]
+interface DiagnosisStep {
+  step_number: number
+  hypothesis: string
+  reasoning: string
+  rejected_reason: string
+  is_accepted: boolean
+  is_rejected: boolean
+  evidence: string[]
+}
+
+interface DiagnosisProcess {
+  steps: DiagnosisStep[]
+  final_diagnosis: string
+  confidence: number
+  summary: string
+  total_steps: number
+}
+
+interface PatientCase {
+  request: string
+  Vital_Signs: Record<string, string>
+  Diagnosis_Process: DiagnosisProcess | null
+  Diagnosis: string
+  Treatment_Plan: string
 }
 
 export default function ChatPage() {
@@ -29,8 +50,20 @@ export default function ChatPage() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [currentStep, setCurrentStep] = useState(0)
-  const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisResult | null>(null)
+  const [patientCase, setPatientCase] = useState<PatientCase | null>(null)
+
+  // 使用 ref 来跟踪流式消息
+  const streamingIdRef = useRef<string>('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const wsInitialized = useRef(false)
+
+  // 初始化 WebSocket 连接
+  useEffect(() => {
+    if (!wsInitialized.current) {
+      wsInitialized.current = true
+      connectWebSocket().catch(console.error)
+    }
+  }, [])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -54,15 +87,57 @@ export default function ChatPage() {
     setInput('')
     setLoading(true)
 
+    // 创建流式消息占位
+    const streamingId = (Date.now() + 1).toString()
+    streamingIdRef.current = streamingId
+
+    // 先添加一个空的护士消息
+    const nurseMessage: Message = {
+      id: streamingId,
+      role: 'nurse',
+      content: '',
+      timestamp: new Date()
+    }
+    setMessages(prev => [...prev, nurseMessage])
+
+    let receivedContent = ''
+
     try {
-      const response = await sendMessage(input)
-      const nurseMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'nurse',
-        content: response.护士,
-        timestamp: new Date()
-      }
-      setMessages(prev => [...prev, nurseMessage])
+      sendStreamingMessage(
+        input,
+        // onChunk - 收到每个数据块
+        (chunk) => {
+          receivedContent += chunk
+          // 直接更新消息数组中的内容
+          setMessages(prevMessages => {
+            const newMessages = [...prevMessages]
+            const nurseIndex = newMessages.findIndex(m => m.id === streamingId)
+            if (nurseIndex >= 0) {
+              newMessages[nurseIndex] = {
+                ...newMessages[nurseIndex],
+                content: receivedContent
+              }
+            }
+            return newMessages
+          })
+        },
+        // onComplete - 流式传输完成
+        () => {
+          streamingIdRef.current = ''
+          setLoading(false)
+        },
+        // onError - 发生错误
+        (error) => {
+          setMessages(prev => [...prev, {
+            id: (Date.now() + 1).toString(),
+            role: 'system',
+            content: '抱歉，服务出现了一些问题：' + error,
+            timestamp: new Date()
+          }])
+          streamingIdRef.current = ''
+          setLoading(false)
+        }
+      )
     } catch (error) {
       setMessages(prev => [...prev, {
         id: (Date.now() + 1).toString(),
@@ -70,27 +145,84 @@ export default function ChatPage() {
         content: '抱歉，服务出现了一些问题，请稍后再试。',
         timestamp: new Date()
       }])
-    } finally {
+      streamingIdRef.current = ''
       setLoading(false)
     }
   }
 
   const handleDiagnosis = async () => {
     setLoading(true)
-    try {
-      const result = await getDiagnosis('开始诊断')
-      setDiagnosisResult(result)
-      setCurrentStep(1)
+    setCurrentStep(1)
 
-      setMessages(prev => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'doctor',
-        content: '诊断推理完成！已为您生成治疗规划建议。',
-        timestamp: new Date()
-      }])
+    setMessages(prev => [...prev, {
+      id: (Date.now() + 1).toString(),
+      role: 'doctor',
+      content: '开始诊断推理...',
+      timestamp: new Date()
+    }])
+
+    try {
+      startStreamingDiagnosis(
+        '开始诊断',
+        {
+          onPhaseStart: (phase) => {
+            setMessages(prev => [...prev, {
+              id: (Date.now() + Math.random()).toString(),
+              role: 'system',
+              content: `=== ${phase} ===`,
+              timestamp: new Date()
+            }])
+            // 更新当前步骤
+            if (phase === '诊断推理') {
+              setCurrentStep(1)
+            } else if (phase === '治疗规划') {
+              setCurrentStep(2)
+            }
+          },
+          onChunk: (data) => {
+            // 同时添加到聊天框显示
+            const role = data.phase === '诊断推理' ? 'expert' : 'assistant'
+            const roleName = data.phase === '诊断推理' ? `推理专家-${data.turn}` : `治疗规划-${data.turn}`
+
+            setMessages(prev => {
+              // 查找是否已存在该角色的消息
+              const msgId = `${data.phase}_${data.role}_${data.turn}`
+              const existingIndex = prev.findIndex(m => m.id === msgId)
+
+              if (existingIndex >= 0) {
+                // 更新已有消息
+                const newMessages = [...prev]
+                newMessages[existingIndex] = {
+                  ...newMessages[existingIndex],
+                  content: newMessages[existingIndex].content + data.content
+                }
+                return newMessages
+              } else {
+                // 添加新消息
+                return [...prev, {
+                  id: msgId,
+                  role: role as any,
+                  content: data.content,
+                  timestamp: new Date()
+                }]
+              }
+            })
+          },
+          onComplete: () => {
+            setCurrentStep(2)
+            setLoading(false)
+          },
+          onError: (error) => {
+            console.error('诊断失败:', error)
+            setLoading(false)
+          },
+          onPatientCaseUpdate: (caseData) => {
+            setPatientCase(caseData)
+          }
+        }
+      )
     } catch (error) {
       console.error('诊断失败:', error)
-    } finally {
       setLoading(false)
     }
   }
@@ -103,6 +235,10 @@ export default function ChatPage() {
         return <Avatar icon={<MedicineBoxOutlined />} style={{ backgroundColor: '#1890ff' }} />
       case 'doctor':
         return <Avatar icon={<SolutionOutlined />} style={{ backgroundColor: '#722ed1' }} />
+      case 'expert':
+        return <Avatar icon={<FileTextOutlined />} style={{ backgroundColor: '#fa8c16' }} />
+      case 'assistant':
+        return <Avatar icon={<RobotOutlined />} style={{ backgroundColor: '#eb2f96' }} />
       default:
         return <Avatar icon={<RobotOutlined />} style={{ backgroundColor: '#faad14' }} />
     }
@@ -113,6 +249,8 @@ export default function ChatPage() {
       case 'user': return '患者'
       case 'nurse': return '护士'
       case 'doctor': return '医生'
+      case 'expert': return '推理专家'
+      case 'assistant': return '治疗规划师'
       default: return '系统'
     }
   }
@@ -155,23 +293,22 @@ export default function ChatPage() {
                       backgroundColor: msg.role === 'user' ? '#1890ff' : '#f0f2f5',
                       color: msg.role === 'user' ? '#fff' : '#333',
                       borderRadius: 12,
-                      wordBreak: 'break-word'
+                      wordBreak: 'break-word',
+                      minWidth: 100
                     }}
                   >
                     <div style={{ fontSize: 12, marginBottom: 4, opacity: 0.7 }}>
                       {getRoleName(msg.role)}
+                      {msg.id === streamingIdRef.current && loading && (
+                        <span style={{ marginLeft: 8 }}><Spin size="small" /></span>
+                      )}
                     </div>
-                    <div>{msg.content}</div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
                   </div>
                 </div>
               </List.Item>
             )}
           />
-          {loading && (
-            <div style={{ textAlign: 'center', padding: 16 }}>
-              <Spin tip="正在思考..." />
-            </div>
-          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -187,36 +324,95 @@ export default function ChatPage() {
                 handleSend()
               }
             }}
+            disabled={loading}
           />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <Button type="primary" onClick={handleSend} loading={loading}>
+            <Button type="primary" onClick={handleSend} loading={loading && !!streamingIdRef.current}>
               发送
             </Button>
-            <Button onClick={handleDiagnosis} loading={loading} type="dashed" danger>
+            <Button onClick={handleDiagnosis} loading={loading} type="dashed" danger disabled={loading}>
               开始诊断
             </Button>
           </div>
         </div>
       </Card>
 
-      {diagnosisResult && (
-        <Card title="诊断结果" style={{ width: 400 }}>
-          <div style={{ marginBottom: 16 }}>
-            <Tag color="purple">诊断推理</Tag>
-            <div style={{ marginTop: 8, padding: 8, background: '#f9f0ff', borderRadius: 4 }}>
-              {diagnosisResult.诊断推理.map((item, idx) => (
-                <div key={idx} style={{ marginBottom: 4 }}>• {item}</div>
-              ))}
+      {patientCase && (
+        <Card title="诊断结果" style={{ width: 450, overflow: 'auto', maxHeight: 'calc(100vh - 200px)' }}>
+          {/* 症状信息 */}
+          {Object.keys(patientCase.Vital_Signs).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <Tag color="blue">症状信息</Tag>
+              <div style={{ marginTop: 8, padding: 8, background: '#e6f7ff', borderRadius: 4 }}>
+                {Object.entries(patientCase.Vital_Signs).map(([key, value], idx) => (
+                  <div key={idx} style={{ marginBottom: 4, fontSize: 13 }}>
+                    <span style={{ fontWeight: 'bold', color: '#1890ff' }}>{key}:</span>
+                    <span style={{ marginLeft: 8 }}>{value}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-          <div>
-            <Tag color="blue">治疗规划</Tag>
-            <div style={{ marginTop: 8, padding: 8, background: '#e6f7ff', borderRadius: 4 }}>
-              {diagnosisResult.治疗规划.map((item, idx) => (
-                <div key={idx} style={{ marginBottom: 4 }}>• {item}</div>
-              ))}
+          )}
+
+          {/* 诊断推理过程 */}
+          {patientCase.Diagnosis_Process && patientCase.Diagnosis_Process.steps.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <Tag color="orange">诊断推理过程</Tag>
+              <div style={{ marginTop: 8 }}>
+                {patientCase.Diagnosis_Process.steps.map((step, idx) => (
+                  <div key={idx} style={{
+                    marginBottom: 12,
+                    padding: 8,
+                    background: step.is_accepted ? '#f6ffed' : step.is_rejected ? '#fff1f0' : '#fff7e6',
+                    borderRadius: 4,
+                    border: `1px solid ${step.is_accepted ? '#b7eb8f' : step.is_rejected ? '#ffa39e' : '#ffd591'}`
+                  }}>
+                    <div style={{ fontWeight: 'bold', fontSize: 12, color: '#666', marginBottom: 4 }}>
+                      步骤 {step.step_number}
+                      {step.is_accepted && <span style={{ color: '#52c41a', marginLeft: 8 }}>✓ 接受</span>}
+                      {step.is_rejected && <span style={{ color: '#ff4d4f', marginLeft: 8 }}>✗ 排除</span>}
+                    </div>
+                    <div style={{ fontSize: 13, marginBottom: 4 }}>
+                      <span style={{ fontWeight: 'bold' }}>假设:</span> {step.hypothesis.slice(0, 100)}{step.hypothesis.length > 100 ? '...' : ''}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#666' }}>
+                      <span style={{ fontWeight: 'bold' }}>理由:</span> {step.reasoning.slice(0, 80)}{step.reasoning.length > 80 ? '...' : ''}
+                    </div>
+                    {step.rejected_reason && (
+                      <div style={{ fontSize: 12, color: '#ff4d4f', marginTop: 4 }}>
+                        <span style={{ fontWeight: 'bold' }}>否定理由:</span> {step.rejected_reason.slice(0, 80)}{step.rejected_reason.length > 80 ? '...' : ''}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* 最终诊断 */}
+          {patientCase.Diagnosis && (
+            <div style={{ marginBottom: 16 }}>
+              <Tag color="purple">最终诊断</Tag>
+              <div style={{ marginTop: 8, padding: 8, background: '#f9f0ff', borderRadius: 4, fontSize: 14 }}>
+                {patientCase.Diagnosis}
+              </div>
+              {patientCase.Diagnosis_Process && patientCase.Diagnosis_Process.confidence > 0 && (
+                <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                  置信度: {(patientCase.Diagnosis_Process.confidence * 100).toFixed(0)}%
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 治疗规划 */}
+          {patientCase.Treatment_Plan && (
+            <div style={{ marginBottom: 16 }}>
+              <Tag color="green">治疗规划</Tag>
+              <div style={{ marginTop: 8, padding: 8, background: '#f6ffed', borderRadius: 4, fontSize: 14, whiteSpace: 'pre-wrap' }}>
+                {patientCase.Treatment_Plan}
+              </div>
+            </div>
+          )}
         </Card>
       )}
     </div>
