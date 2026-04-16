@@ -96,6 +96,12 @@ export function disconnectWebSocket() {
   ws.disconnect()
 }
 
+// 设置全局补充信息处理器
+export function setGlobalSupplementHandler(handler: (question: string) => void) {
+  const ws = getWebSocketService()
+  ws.setGlobalSupplementHandler(handler)
+}
+
 // 发送流式聊天消息
 export function sendStreamingMessage(
   message: string,
@@ -149,6 +155,12 @@ export function sendStreamingMessage(
   ws.sendChatMessage(message)
 }
 
+// 提交补充信息（在诊断推理过程中）
+export function submitSupplementaryInfo(answer: string): Promise<void> {
+  const ws = getWebSocketService()
+  return ws.submitSupplementaryInfo(answer)
+}
+
 // 开始流式诊断
 export function startStreamingDiagnosis(
   request: string,
@@ -170,6 +182,8 @@ export function startStreamingDiagnosis(
     onComplete?: () => void
     onError?: (error: string) => void
     onPatientCaseUpdate?: (patientCase: any) => void
+    onRequestSupplementaryInfo?: (question: string) => void
+    onSupplementaryInfoReceived?: (data: { question: string; answer: string }) => void
   }
 ): void {
   const ws = getWebSocketService()
@@ -229,6 +243,23 @@ export function startStreamingDiagnosis(
       }
       handlers.onComplete?.()
       unsubscribers.forEach(unsub => unsub())
+    })
+  )
+
+  // 监听请求补充信息
+  unsubscribers.push(
+    ws.on('request_supplementary_info', (msg) => {
+      handlers.onRequestSupplementaryInfo?.(msg.question)
+    })
+  )
+
+  // 监听补充信息已接收
+  unsubscribers.push(
+    ws.on('supplementary_info_received', (msg) => {
+      handlers.onSupplementaryInfoReceived?.({
+        question: msg.question,
+        answer: msg.answer
+      })
     })
   )
 

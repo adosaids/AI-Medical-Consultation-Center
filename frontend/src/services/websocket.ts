@@ -61,6 +61,7 @@ export class WebSocketService {
       this.ws.onmessage = (event) => {
         try {
           const message: WebSocketMessage = JSON.parse(event.data)
+          console.log('[WebSocket] 收到消息:', message.type, message)
           this.handleMessage(message)
         } catch (error) {
           console.error('解析 WebSocket 消息失败:', error)
@@ -127,6 +128,36 @@ export class WebSocketService {
     this.send({ action: 'ping' })
   }
 
+  // 提交补充信息（在诊断推理过程中）
+  submitSupplementaryInfo(answer: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      console.log('[WebSocket] 准备提交补充信息:', answer)
+
+      // 先监听确认消息
+      const unsub = this.on('supplementary_info_accepted', (msg) => {
+        console.log('[WebSocket] 收到 supplementary_info_accepted:', msg)
+        unsub()
+        resolve()
+      })
+
+      // 发送补充信息
+      const payload = {
+        action: 'submit_supplementary_info',
+        answer: answer,
+        request_id: Date.now().toString()
+      }
+      console.log('[WebSocket] 发送 submit_supplementary_info:', payload)
+      this.send(payload)
+
+      // 超时处理（30秒，给后端足够时间处理）
+      setTimeout(() => {
+        console.error('[WebSocket] 提交补充信息超时')
+        unsub()
+        reject(new Error('提交补充信息超时'))
+      }, 30000)
+    })
+  }
+
   // 注册消息处理器
   on(type: string, handler: MessageHandler): () => void {
     if (!this.messageHandlers.has(type)) {
@@ -167,6 +198,11 @@ export class WebSocketService {
     })
   }
 
+  // 设置全局补充信息处理器
+  setGlobalSupplementHandler(handler: (question: string) => void) {
+    globalSupplementHandler = handler
+  }
+
   // 检查连接状态
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN
@@ -192,4 +228,11 @@ export function closeWebSocket() {
     wsService.disconnect()
     wsService = null
   }
+}
+
+// 全局补充信息处理器（用于页面刷新后仍能处理补充信息）
+let globalSupplementHandler: ((question: string) => void) | null = null
+
+export function setGlobalSupplementHandler(handler: (question: string) => void) {
+  globalSupplementHandler = handler
 }

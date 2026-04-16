@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Card, Input, Button, List, Avatar, Spin, Tag, Steps } from 'antd'
+import { Card, Input, Button, List, Avatar, Spin, Tag, Steps, Alert } from 'antd'
 import { UserOutlined, RobotOutlined, MedicineBoxOutlined, SolutionOutlined, FileTextOutlined } from '@ant-design/icons'
-import { sendStreamingMessage, startStreamingDiagnosis, connectWebSocket } from '../services/api'
+import { sendStreamingMessage, startStreamingDiagnosis, connectWebSocket, submitSupplementaryInfo, setGlobalSupplementHandler } from '../services/api'
 
 const { TextArea } = Input
 
@@ -52,6 +52,11 @@ export default function ChatPage() {
   const [currentStep, setCurrentStep] = useState(0)
   const [patientCase, setPatientCase] = useState<PatientCase | null>(null)
 
+  // 补充信息相关状态
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null)
+  const [supplementInput, setSupplementInput] = useState('')
+  const [isWaitingForSupplement, setIsWaitingForSupplement] = useState(false)
+
   // 使用 ref 来跟踪流式消息
   const streamingIdRef = useRef<string>('')
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -61,6 +66,20 @@ export default function ChatPage() {
   useEffect(() => {
     if (!wsInitialized.current) {
       wsInitialized.current = true
+
+      // 注册全局补充信息处理器
+      setGlobalSupplementHandler((question: string) => {
+        console.log('[ChatPage] 全局补充信息处理器被调用:', question)
+        setPendingQuestion(question)
+        setIsWaitingForSupplement(true)
+        setMessages(prev => [...prev, {
+          id: (Date.now() + 1).toString(),
+          role: 'doctor',
+          content: `🏥 专科医生需要补充信息：\n\n${question}\n\n请在下方输入框中提供相关信息。`,
+          timestamp: new Date()
+        }])
+      })
+
       connectWebSocket().catch(console.error)
     }
   }, [])
@@ -218,6 +237,29 @@ export default function ChatPage() {
           },
           onPatientCaseUpdate: (caseData) => {
             setPatientCase(caseData)
+          },
+          onRequestSupplementaryInfo: (question: string) => {
+            // 显示补充信息输入框
+            setPendingQuestion(question)
+            setIsWaitingForSupplement(true)
+            setMessages(prev => [...prev, {
+              id: (Date.now() + 1).toString(),
+              role: 'doctor',
+              content: `🏥 专科医生需要补充信息：\n\n${question}\n\n请在下方输入框中提供相关信息。`,
+              timestamp: new Date()
+            }])
+          },
+          onSupplementaryInfoReceived: (data: { question: string; answer: string }) => {
+            // 补充信息已接收，隐藏输入框
+            setIsWaitingForSupplement(false)
+            setPendingQuestion(null)
+            setSupplementInput('')
+            setMessages(prev => [...prev, {
+              id: (Date.now() + 1).toString(),
+              role: 'user',
+              content: `💬 补充信息：${data.answer}`,
+              timestamp: new Date()
+            }])
           }
         }
       )
@@ -260,6 +302,33 @@ export default function ChatPage() {
     { title: '诊断推理', icon: <SolutionOutlined /> },
     { title: '治疗规划', icon: <FileTextOutlined /> },
   ]
+
+  const handleSubmitSupplement = async () => {
+    if (!supplementInput.trim() || !pendingQuestion) return
+
+    // 显示用户输入
+    setMessages(prev => [...prev, {
+      id: (Date.now() + 1).toString(),
+      role: 'user',
+      content: `💬 我的补充：${supplementInput}`,
+      timestamp: new Date()
+    }])
+
+    // 发送到服务器
+    try {
+      await submitSupplementaryInfo(supplementInput)
+      setSupplementInput('')
+      // 注意：不在这里隐藏输入框，等待服务器确认后再隐藏
+    } catch (error) {
+      console.error('提交补充信息失败:', error)
+      setMessages(prev => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'system',
+        content: '提交补充信息失败，请重试。',
+        timestamp: new Date()
+      }])
+    }
+  }
 
   return (
     <div style={{ display: 'flex', gap: 24 }}>
@@ -312,6 +381,36 @@ export default function ChatPage() {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* 补充信息输入框 - 仅在需要时显示 */}
+        {isWaitingForSupplement && (
+          <div style={{ marginBottom: 16, padding: 16, background: '#fffbe6', border: '1px solid #ffe58f', borderRadius: 8 }}>
+            <Alert
+              title="专科医生需要补充信息"
+              description={pendingQuestion || '请提供额外信息以帮助诊断'}
+              type="warning"
+              showIcon
+              style={{ marginBottom: 8 }}
+            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <TextArea
+                value={supplementInput}
+                onChange={(e) => setSupplementInput(e.target.value)}
+                placeholder="请输入补充信息..."
+                autoSize={{ minRows: 2, maxRows: 4 }}
+                onPressEnter={(e) => {
+                  if (!e.shiftKey) {
+                    e.preventDefault()
+                    handleSubmitSupplement()
+                  }
+                }}
+              />
+              <Button type="primary" onClick={handleSubmitSupplement}>
+                提交补充
+              </Button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 8 }}>
           <TextArea
             value={input}
@@ -324,13 +423,13 @@ export default function ChatPage() {
                 handleSend()
               }
             }}
-            disabled={loading}
+            disabled={loading || isWaitingForSupplement}
           />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <Button type="primary" onClick={handleSend} loading={loading && !!streamingIdRef.current}>
+            <Button type="primary" onClick={handleSend} loading={loading && !!streamingIdRef.current} disabled={isWaitingForSupplement}>
               发送
             </Button>
-            <Button onClick={handleDiagnosis} loading={loading} type="dashed" danger disabled={loading}>
+            <Button onClick={handleDiagnosis} loading={loading} type="dashed" danger disabled={loading || isWaitingForSupplement}>
               开始诊断
             </Button>
           </div>
