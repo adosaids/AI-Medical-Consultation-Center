@@ -42,11 +42,16 @@ class ConnectionManager:
             del self.active_connections[client_id]
 
     async def send_message(self, client_id: str, message: dict):
+        msg_type = message.get("type", "unknown")
+        print(f"[WebSocket] 发送消息: client_id={client_id}, type={msg_type}")
         if client_id in self.active_connections:
             try:
                 await self.active_connections[client_id].send_json(message)
+                print(f"[WebSocket] ✓ 消息已发送")
             except Exception as e:
-                print(f"发送消息失败: {e}")
+                print(f"[WebSocket] ❌ 发送消息失败: {e}")
+        else:
+            print(f"[WebSocket] ❌ client_id={client_id} 不在活跃连接中")
 
     async def broadcast(self, message: dict):
         for connection in self.active_connections.values():
@@ -149,6 +154,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             data = await websocket.receive_text()
             message_data = json.loads(data)
             action = message_data.get("action")
+            print(f"\n[WebSocket] 收到消息: client_id={client_id}, action={action}")
 
             if action == "chat":
                 # 处理聊天消息（流式）
@@ -156,6 +162,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             elif action == "start_diagnosis":
                 # 开始诊断流程（异步流式）
                 await handle_streaming_diagnosis(client_id, message_data.get("request", ""))
+            elif action == "submit_supplementary_info":
+                # 提交补充信息（在诊断推理过程中）
+                await handle_supplementary_info(
+                    client_id,
+                    message_data.get("answer", ""),
+                    message_data.get("request_id", "")
+                )
             elif action == "ping":
                 await manager.send_message(client_id, {"type": "pong"})
 
@@ -210,6 +223,60 @@ async def handle_streaming_chat(client_id: str, message: str):
         "content": full_response,
         "role": "nurse"
     })
+
+
+async def handle_supplementary_info(client_id: str, answer: str, request_id: str):
+    """处理用户提交的补充信息
+
+    在诊断推理过程中，当专科医生需要补充信息时，用户通过此接口提交回答
+    """
+    print(f"\n{'='*60}")
+    print(f"[handle_supplementary_info] 收到补充信息")
+    print(f"  client_id={client_id}")
+    print(f"  request_id={request_id}")
+    print(f"  answer={answer[:50]}...")
+    print(f"{'='*60}\n")
+
+    streaming_work = client_work_instances.get(client_id)
+    if not streaming_work:
+        print(f"[handle_supplementary_info] ❌ 错误: 没有找到 client_id={client_id} 的 StreamingWork 实例")
+        await manager.send_message(client_id, {
+            "type": "error",
+            "error": "没有进行中的诊断流程"
+        })
+        return
+
+    is_waiting = streaming_work.is_waiting_for_supplement()
+    print(f"[handle_supplementary_info] 检查是否在等待补充: is_waiting={is_waiting}")
+
+    if not is_waiting:
+        print(f"[handle_supplementary_info] ⚠️ 警告: 当前不需要补充信息，忽略该请求")
+        await manager.send_message(client_id, {
+            "type": "error",
+            "error": "当前不需要补充信息"
+        })
+        return
+
+    try:
+        # 提交补充信息，恢复诊断流程
+        print(f"[handle_supplementary_info] ✓ 正在提交补充信息...")
+        await streaming_work.submit_supplementary_info(answer)
+        print(f"[handle_supplementary_info] ✓ 补充信息已提交，准备发送确认消息")
+
+        await manager.send_message(client_id, {
+            "type": "supplementary_info_accepted",
+            "request_id": request_id
+        })
+        print(f"[handle_supplementary_info] ✓ 确认消息已发送")
+        print(f"{'='*60}\n")
+    except Exception as e:
+        print(f"[handle_supplementary_info] ❌ 处理补充信息错误: {e}")
+        import traceback
+        traceback.print_exc()
+        await manager.send_message(client_id, {
+            "type": "error",
+            "error": f"处理补充信息失败: {str(e)}"
+        })
 
 
 async def handle_streaming_diagnosis(client_id: str, request: str):
