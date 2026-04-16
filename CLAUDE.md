@@ -110,9 +110,9 @@ Agent roles: `huanzhejiekou` (护士), `zhenduantuili` (推理专家), `zhuankey
 
 ### Frontend Structure
 
-- `ChatPage.tsx` - Main chat interface with diagnosis flow
+- `ChatPage.tsx` - Main chat interface with diagnosis flow and supplementary information handling
 - `KnowledgePage.tsx` - PDF upload and RAG management
-- `websocket.ts` - WebSocket service with reconnection logic
+- `websocket.ts` - WebSocket service with reconnection logic and global supplement handler
 - `api.ts` - API client for HTTP and WebSocket communication
 
 ### Key Implementation Details
@@ -122,6 +122,8 @@ Agent roles: `huanzhejiekou` (护士), `zhenduantuili` (推理专家), `zhuankey
 3. **Context Truncation** - All long texts are truncated with `MAX_SYMPTOM_LENGTH`, `MAX_DIAGNOSIS_LENGTH` limits
 4. **Flow Control** - `<stop>` tag terminates agent conversations; `<need_info>` triggers supplementary info request
 5. **File Storage** - PDFs processed into chunks and stored in Qdrant vector DB at `local_data/`
+6. **Supplementary Information Handling** - Global handler for processing doctor's requests for additional information during diagnosis
+7. **WebSocket Error Handling** - Improved error handling and reconnection logic
 
 ### WebSocket Message Types
 
@@ -135,4 +137,5 @@ Agent roles: `huanzhejiekou` (护士), `zhenduantuili` (推理专家), `zhuankey
 - `diagnosis_phase_start` / `diagnosis_phase_complete` - Phase boundaries
 - `diagnosis_chunk` - Streaming diagnosis content
 - `request_supplementary_info` - Request user input
+- `supplementary_info_accepted` - Confirmation that supplementary info was received
 - `diagnosis_complete` - Final results with PatientCase
